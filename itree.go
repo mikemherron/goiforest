@@ -1,17 +1,25 @@
 package goitree
 
-import "math/rand"
+import (
+	"fmt"
+	"math"
+)
 
 type IsolationForest struct {
-	Trees []*IsolationTree
+	trees           []*IsolationTree
+	trainingSize    int
+	expectedAverage int
 }
 
-func (f *IsolationForest) Score(dataPoint DataPoint) float64 {
+func (f *IsolationForest) Score(dataPoint map[string]string) float64 {
 	score := 0.0
-	pathLengths := []int{}
-	for _, tree := range f.Trees {
-		score += tree.traverse(dataPoint)
+
+	var pathLengthTotal int
+	for _, tree := range f.trees {
+		pathLengthTotal += tree.traverse(dataPoint)
 	}
+
+	avgPathLength := float64(pathLengthTotal) / float64(len(f.trees))
 
 	return score / NumTrees
 }
@@ -20,11 +28,10 @@ type IsolationTree struct {
 	Root *IsolationTreeNode
 }
 
-func (t *IsolationTree) traverse(dataPoint DataPoint) int {
-	node := t.Root
+func (t *IsolationTree) traverse(dataPoint map[string]string) int {
 	pathLength := 0
-
-	for !node.IsLeaf {
+	node := t.Root
+	for !node.isLeaf {
 		if dataPoint.Features[node.Feature] == node.Value {
 			node = node.Left
 		} else {
@@ -36,158 +43,50 @@ func (t *IsolationTree) traverse(dataPoint DataPoint) int {
 	return pathLength
 }
 
-//types of comparison
+// types of comparison
 // Equals, Not Equals
 type IsolationTreeNode struct {
-	Left   *IsolationTreeNode
-	Right  *IsolationTreeNode
-	IsLeaf bool
-	// Feature to split on
-	Feature FeatureName
-	// Value to split on
-	Value    FeatureValue
-	IsEquals bool
-}
-
-type DataSet struct {
-	DataPoints []DataPoint
-}
-
-func (d *DataSet) copy() *DataSet {
-	dataPoints := make([]DataPoint, len(d.DataPoints))
-	copy(dataPoints, d.DataPoints)
-	return &DataSet{DataPoints: dataPoints}
-}
-
-func (d *DataSet) Split(feature FeatureName, value FeatureValue) (*DataSet, *DataSet) {
-	left := DataSet{DataPoints: []DataPoint{}}
-	right := DataSet{DataPoints: []DataPoint{}}
-
-	for _, dataPoint := range d.DataPoints {
-		if dataPoint.Features[feature] == value {
-			left.DataPoints = append(left.DataPoints, dataPoint)
-		} else {
-			right.DataPoints = append(right.DataPoints, dataPoint)
-		}
-	}
-
-	return &left, &right
-}
-
-// Should these be interfaces?
-type DataPoint struct {
-	// Each data point must have the same features?
-	Features map[FeatureName]FeatureValue
-}
-
-type FeatureName = string
-
-type FeatureValue struct {
-	// Assume string features with categorical
-	// selection only for now
-	Str string
+	left   *IsolationTreeNode
+	right  *IsolationTreeNode
+	split  *splitCondition
+	isLeaf bool
 }
 
 const NumTrees = 100
+const SampleSize = 512
 
-type FeatureSet struct {
-	Names      []FeatureName
-	Values     map[FeatureName]map[FeatureValue]bool
-	ValuesList map[FeatureName][]FeatureValue
-}
-
-func (f *FeatureSet) AddFeature(name FeatureName) {
-	if f.Has(name) {
-		panic("Feature already exists")
-	}
-	f.Names = append(f.Names, name)
-	f.Values[name] = map[FeatureValue]bool{}
-}
-
-func (f *FeatureSet) AddValue(name FeatureName, value FeatureValue) FeatureValue {
-	if _, ok := f.Values[name]; !ok {
-		panic("Feature does not exist")
-	}
-	f.Values[name][value] = true
-	return value
-}
-
-func (f *FeatureSet) Has(name FeatureName) bool {
-	_, ok := f.Values[name]
-	return ok
-}
-
-func (f *FeatureSet) RandomFeatureSplit() (FeatureName, FeatureValue) {
-	feature := f.Names[rand.Intn(len(f.Names))]
-	value := f.ValuesList[feature][rand.Intn(len(f.ValuesList[feature]))]
-
-	return feature, value
-}
-
-func newFeatureSet(dataSet *DataSet) *FeatureSet {
-	featureSet := FeatureSet{
-		Values:     map[FeatureName]map[FeatureValue]bool{},
-		ValuesList: map[FeatureName][]FeatureValue{},
-		Names:      []FeatureName{},
+func BuildForest(dataSet *DataSet) *IsolationForest {
+	forest := IsolationForest{
+		trees:           []*IsolationTree{},
+		trainingSize:    dataSet.Size,
+		expectedAverage: 0,
 	}
 
-	for feature := range dataSet.DataPoints[0].Features {
-		featureSet.AddFeature(feature)
-	}
+	maxDepth := int(math.Log(SampleSize) / math.Log(2))
 
-	// Collect all features and values
-	for _, dataPoint := range dataSet.DataPoints {
-		for featureName, featureValue := range dataPoint.Features {
-			if !featureSet.Has(featureName) {
-				panic("Feature does not exist")
-			}
-			featureSet.AddValue(featureName, featureValue)
-		}
-
-		for featureName := range featureSet.Values {
-			if _, ok := dataPoint.Features[featureName]; !ok {
-				panic("Data point does not have all features")
-			}
-		}
-	}
-
-	// Build Values List
-	for featureName, values := range featureSet.Values {
-		for value := range values {
-			featureSet.ValuesList[featureName] = append(featureSet.ValuesList[featureName], value)
-		}
-	}
-
-	return &featureSet
-}
-
-func Build(dataSet *DataSet) *IsolationForest {
-	featureSet := newFeatureSet(dataSet)
-	forest := IsolationForest{Trees: []*IsolationTree{}}
+	fmt.Print("Max Depth: ", maxDepth)
 	for i := 0; i < NumTrees; i++ {
-		root := &IsolationTreeNode{}
-		buildTree(root, dataSet.copy(), featureSet)
-
-		forest.Trees = append(forest.Trees)
+		forest.trees = append(forest.trees,
+			&IsolationTree{Root: buildTree(dataSet.sample(SampleSize), 0, maxDepth)})
 	}
 
 	return &forest
 }
 
-func buildTree(parent *IsolationTreeNode, dataSet *DataSet, featureSet *FeatureSet) {
-	if len(dataSet.DataPoints) <= 1 {
-		parent.IsLeaf = true
-		return
+func buildTree(dataSet *DataSet, depth int, maxDepth int) *IsolationTreeNode {
+	node := &IsolationTreeNode{}
+	if dataSet.Size <= 1 || depth >= maxDepth {
+		node.isLeaf = true
+	} else {
+		split, left, right := dataSet.Split()
+		node.split = split
+		node.left = buildTree(left, depth+1, maxDepth)
+		node.right = buildTree(right, depth+1, maxDepth)
 	}
 
-	parent.Left = &IsolationTreeNode{}
-	parent.Right = &IsolationTreeNode{}
+	return node
+}
 
-	// TODO: Must be a much more efficient way to create new
-	// feature set based on remaining data
-	left, right := dataSet.Split(featureSet.RandomFeatureSplit())
-	// NEXT: Capture the feature and value used to split so we can
-	// use it later for scoring
-	buildTree(parent.Left, left, newFeatureSet(left))
-	buildTree(parent.Right, right, newFeatureSet(right))
+func harmonicNumber(n int) float64 {
+	return float64(n) + 0.5772156649 // Euler-Mascheroni constant
 }
