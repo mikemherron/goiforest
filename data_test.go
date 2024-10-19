@@ -9,13 +9,16 @@ import (
 
 func TestDataSetFromCSV(t *testing.T) {
 	r := csv.NewReader(strings.NewReader(
-		`Name,Color
-		apple,red
-		banana,yellow
-		pear,green`,
+		`Name,Color,Ignore,Cost
+		apple,red,x,0.5
+		banana,yellow,x,0.2
+		pear,green,x,0.8`,
 	))
 
-	ds := NewDataSetFromCSV(r)
+	ds := NewDataSetFromCSV(r,
+		map[string]FeatureType{"Cost": FeatureTypeNumerical},
+		map[string]bool{"Ignore": true})
+
 	if ds.Size != 3 {
 		t.Errorf("Expected size 3, got %d", ds.Size)
 	}
@@ -30,6 +33,11 @@ func TestDataSetFromCSV(t *testing.T) {
 			{Str: "red"},
 			{Str: "yellow"},
 			{Str: "green"},
+		},
+		{Name: "Cost", Type: FeatureTypeNumerical}: {
+			{Num: 0.5},
+			{Num: 0.2},
+			{Num: 0.8},
 		},
 	}
 
@@ -61,7 +69,7 @@ func TestSplit(t *testing.T) {
 
 	actualLeft, actualRight := ds.splitOn(&splitCondition{
 		feature: Feature{Name: "Color", Type: FeatureTypeCategorical},
-		value:   "red",
+		check:   splitCategory("red"),
 	})
 
 	expectedLeft := &DataSet{
