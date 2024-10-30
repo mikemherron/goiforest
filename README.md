@@ -1,0 +1,1 @@
+A basic implementation of the Isolation Forest anomoly detection algorithim in go. Mostly for learning, still very much WIP.

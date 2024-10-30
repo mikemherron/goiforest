@@ -3,13 +3,16 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
-	"math/rand/v2"
 	"os"
-	"strings"
 
-	"github.com/mikemherron/goitree"
+	"github.com/mikemherron/goiforest"
 )
 
+// This example demonstrates how to use the Isolation Forest to score a dataset
+// using the Credit Card Fraud dataset from Kaggle. The dataset is available at
+// https://www.kaggle.com/mlg-ulb/creditcardfraud - to run the example download
+// the dataset and provide the path to the CSV file as the first argument to the
+// program.
 func main() {
 	if len(os.Args) < 2 {
 		panic("Please provide a file path")
@@ -27,36 +30,37 @@ func main() {
 		panic(err)
 	}
 
-	dataSet, err := goitree.NewDataSetFromCSV(csv.NewReader(file),
-		map[string]goitree.AttributeType{
-			"V1":  goitree.AttributeTypeNumerical,
-			"V2":  goitree.AttributeTypeNumerical,
-			"V3":  goitree.AttributeTypeNumerical,
-			"V4":  goitree.AttributeTypeNumerical,
-			"V5":  goitree.AttributeTypeNumerical,
-			"V6":  goitree.AttributeTypeNumerical,
-			"V7":  goitree.AttributeTypeNumerical,
-			"V8":  goitree.AttributeTypeNumerical,
-			"V9":  goitree.AttributeTypeNumerical,
-			"V10": goitree.AttributeTypeNumerical,
-			"V11": goitree.AttributeTypeNumerical,
-			"V12": goitree.AttributeTypeNumerical,
-			"V13": goitree.AttributeTypeNumerical,
-			"V14": goitree.AttributeTypeNumerical,
-			"V15": goitree.AttributeTypeNumerical,
-			"V16": goitree.AttributeTypeNumerical,
-			"V17": goitree.AttributeTypeNumerical,
-			"V18": goitree.AttributeTypeNumerical,
-			"V19": goitree.AttributeTypeNumerical,
-			"V20": goitree.AttributeTypeNumerical,
-			"V21": goitree.AttributeTypeNumerical,
-			"V22": goitree.AttributeTypeNumerical,
-			"V23": goitree.AttributeTypeNumerical,
-			"V24": goitree.AttributeTypeNumerical,
-			"V25": goitree.AttributeTypeNumerical,
-			"V26": goitree.AttributeTypeNumerical,
-			"V27": goitree.AttributeTypeNumerical,
-			"V28": goitree.AttributeTypeNumerical,
+	dataSet, err := goiforest.NewDataSetFromCSV(csv.NewReader(file),
+		map[string]goiforest.AttributeType{
+			"V1":    goiforest.AttributeTypeNumerical,
+			"V2":    goiforest.AttributeTypeNumerical,
+			"V3":    goiforest.AttributeTypeNumerical,
+			"V4":    goiforest.AttributeTypeNumerical,
+			"V5":    goiforest.AttributeTypeNumerical,
+			"V6":    goiforest.AttributeTypeNumerical,
+			"V7":    goiforest.AttributeTypeNumerical,
+			"V8":    goiforest.AttributeTypeNumerical,
+			"V9":    goiforest.AttributeTypeNumerical,
+			"V10":   goiforest.AttributeTypeNumerical,
+			"V11":   goiforest.AttributeTypeNumerical,
+			"V12":   goiforest.AttributeTypeNumerical,
+			"V13":   goiforest.AttributeTypeNumerical,
+			"V14":   goiforest.AttributeTypeNumerical,
+			"V15":   goiforest.AttributeTypeNumerical,
+			"V16":   goiforest.AttributeTypeNumerical,
+			"V17":   goiforest.AttributeTypeNumerical,
+			"V18":   goiforest.AttributeTypeNumerical,
+			"V19":   goiforest.AttributeTypeNumerical,
+			"V20":   goiforest.AttributeTypeNumerical,
+			"V21":   goiforest.AttributeTypeNumerical,
+			"V22":   goiforest.AttributeTypeNumerical,
+			"V23":   goiforest.AttributeTypeNumerical,
+			"V24":   goiforest.AttributeTypeNumerical,
+			"V25":   goiforest.AttributeTypeNumerical,
+			"V26":   goiforest.AttributeTypeNumerical,
+			"V27":   goiforest.AttributeTypeNumerical,
+			"V28":   goiforest.AttributeTypeNumerical,
+			"Class": goiforest.AttributeTypeCategorical,
 		},
 	)
 
@@ -64,89 +68,38 @@ func main() {
 		panic(err)
 	}
 
-	// var treesDebug string
-	forest := goitree.BuildForest(dataSet)
-	// for i, t := range forest.Trees {
-	// 	treesDebug += fmt.Sprintf("==============Tree %d==========\n", i)
-	// 	treesDebug += t.String()
-	// }
-
-	// os.WriteFile("trees-debug.txt", []byte(treesDebug), 0644)
-
-	file, err = os.Open(filePath)
+	// Exclude the label attribute from the training data
+	trainingDataSet, err := dataSet.Excluding("Class")
 	if err != nil {
 		panic(err)
 	}
 
-	verifies := csv.NewReader(file)
-	allRecords, err := verifies.ReadAll()
+	// Build the forest
+	forest := goiforest.BuildForest(trainingDataSet)
+
+	// Grab 80 regular records and 20 anomalous records
+	regularRecords := dataSet.Filter(
+		func(record map[string]goiforest.AttributeValue) bool {
+			return record["Class"].Str == "0"
+		}).Sample(80)
+
+	anomalousRecords := dataSet.Filter(
+		func(record map[string]goiforest.AttributeValue) bool {
+			return record["Class"].Str != "0"
+		}).Sample(20)
+
+	// Merge the two sets together
+	testingSet, err := dataSet.CopyNoValues().Merge(anomalousRecords, regularRecords)
 	if err != nil {
 		panic(err)
 	}
 
-	headers := allRecords[0]
-	for i, header := range headers {
-		headers[i] = strings.TrimSpace(header)
-	}
-
-	allRecords = allRecords[1:]
-	rand.Shuffle(len(allRecords), func(i, j int) {
-		allRecords[i], allRecords[j] = allRecords[j], allRecords[i]
-	})
-
-	const reg = 80
-	const anom = 20
-	checkList := make([]map[string]string, 0)
-	regular := 0
-	anomalous := 0
-	for _, record := range allRecords {
-		label := record[len(record)-1]
-		include := false
-		if label == "0" && regular < reg {
-			include = true
-			regular++
-		} else if label != "0" && anomalous < anom {
-			include = true
-			anomalous++
-		}
-
-		if include {
-			checkRecord := make(map[string]string)
-			for i, header := range headers {
-				checkRecord[header] = record[i]
-			}
-			checkList = append(checkList, checkRecord)
-		}
-
-		if regular == reg && anomalous == anom {
-			break
-		}
-	}
-
-	labelAttr := goitree.Attribute{Name: "label", Type: goitree.AttributeTypeCategorical}
-	scored := dataSet.CopyNoValues()
-	scored.AddAttribute(labelAttr)
-	for _, record := range checkList {
+	// Score the testing set
+	for i := 0; i < testingSet.Size; i++ {
+		record := testingSet.GetRowPlain(i)
 		result := forest.Score(record)
-		attributes := result.Attributes
-		attributes[labelAttr] = goitree.NewAttributeValue(labelAttr, record["Class"])
-		scored.AddRow(result.Attributes)
-		fmt.Printf("Label: %s, Score: %f Avg Path: %f\n", record["Class"], result.Score, result.AveragePathLength)
-		// if record["label"] != "normal." {
-
-		// 	tracesDebug := ""
-		// 	for attr, val := range result.Attributes {
-		// 		tracesDebug += fmt.Sprintf("%s: %s\n", attr.Name, attr.ValueToString(val))
-		// 	}
-		// 	tracesDebug += "\n"
-
-		// 	for i, trace := range result.TreeTraces {
-		// 		tracesDebug += fmt.Sprintf("================= Tree =========== %d\n", i)
-		// 		tracesDebug += strings.Join(trace, "\n")
-		// 		tracesDebug += "\n"
-		// 	}
-		// 	os.WriteFile(fmt.Sprintf("traces-%d.txt", i), []byte(tracesDebug), 0644)
-		// }
+		fmt.Printf("Label: %s, Score: %f Avg Path: %f\n", record["Class"],
+			result.Score, result.AveragePathLength)
 	}
 
 }

@@ -1,60 +1,85 @@
-package goitree
+package goiforest
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"strconv"
 )
 
 type IsolationForest struct {
-	trees           []*IsolationTree
-	features        map[string]Feature
-	trainingSize    int
+	Trees           []*IsolationTree
+	attributes      map[string]Attribute
 	expectedAverage float64
 }
 
-func (f *IsolationForest) Score(dataPoint map[string]string) float64 {
+type ScoreResult struct {
+	Score             float64
+	Attributes        map[Attribute]AttributeValue
+	AveragePathLength float64
+	TreeTraces        [][]string
+}
+
+func (f *IsolationForest) Score(dataPoint map[string]string) ScoreResult {
 	score := 0.0
 
-	dataPointFeatures := make(map[Feature]FeatureValue)
-	for _, f := range f.features {
+	dataPointAttributes := make(map[Attribute]AttributeValue)
+	for _, f := range f.attributes {
 		val, exists := dataPoint[f.Name]
 		if !exists {
-			panic(fmt.Sprintf("Feature %s not found on %v", f.Name, dataPoint))
+			panic(fmt.Sprintf("Attribute %s not found on %v", f.Name, dataPoint))
 		}
-		dataPointFeatures[f] = newFeatureValue(f, val)
+		dataPointAttributes[f] = NewAttributeValue(f, val)
 	}
 
+	traces := make([][]string, len(f.Trees))
 	var pathLengthTotal float64
-	for _, tree := range f.trees {
-		pathLengthTotal += tree.traverse(dataPointFeatures)
+	for i, tree := range f.Trees {
+		n, trace := tree.traverse(dataPointAttributes)
+		traces[i] = trace
+		pathLengthTotal += n
 	}
 
-	avgPathLength := float64(pathLengthTotal) / float64(len(f.trees))
-	score = math.Pow(2, -(avgPathLength / f.expectedAverage))
-	return score
+	avgPathLength := float64(pathLengthTotal) / float64(len(f.Trees))
+	score = math.Pow(2, (-avgPathLength / f.expectedAverage))
+	return ScoreResult{
+		Score:             score,
+		Attributes:        dataPointAttributes,
+		AveragePathLength: avgPathLength,
+		TreeTraces:        traces,
+	}
 }
 
 type IsolationTree struct {
 	Root *IsolationTreeNode
 }
 
-func (t *IsolationTree) traverse(dataPoint map[Feature]FeatureValue) float64 {
-	pathLength := 0
+func (t *IsolationTree) String() string {
+	return t.Root.String(0)
+}
+
+func (t *IsolationTree) traverse(dataPoint map[Attribute]AttributeValue) (float64, []string) {
+	var pathLength float64 = 0.0
+	var traces []string
 	node := t.Root
 	for !node.isLeaf {
-		if node.split.check(dataPoint[node.split.feature]) {
+		att := node.split.attribute
+		val := dataPoint[att]
+		if node.split.check(val) {
+			traces = append(traces, fmt.Sprintf("%s (%s)", node.split.String(false), att.ValueToString(val)))
 			node = node.left
 		} else {
+			traces = append(traces, fmt.Sprintf("%s (%s)", node.split.String(true), att.ValueToString(val)))
 			node = node.right
 		}
 		pathLength++
 	}
 
-	return float64(pathLength) + avgPathLen(node.remainingSize)
+	traces = append(traces, fmt.Sprintf("Hit root, path length %f, remaining size: %d\n", pathLength, node.remainingSize))
+
+	return pathLength + avgPathLen(node.remainingSize), traces
 }
 
-// types of comparison
-// Equals, Not Equals
 type IsolationTreeNode struct {
 	left          *IsolationTreeNode
 	right         *IsolationTreeNode
@@ -63,74 +88,81 @@ type IsolationTreeNode struct {
 	isLeaf        bool
 }
 
+func (n *IsolationTreeNode) String(depth int) string {
+	prefix := fmt.Sprintf("%"+strconv.Itoa(depth)+"s", "")
+	var s string
+	if n.isLeaf {
+		s += prefix + fmt.Sprintf("Leaf [%d]\n", n.remainingSize)
+	} else {
+		s += prefix + fmt.Sprintf("Node [%d]\n", n.remainingSize)
+		s += prefix + fmt.Sprintf("%s\n", n.split.String(false))
+		s += prefix + n.left.String(depth+1)
+		s += prefix + fmt.Sprintf("%s\n", n.split.String(true))
+		s += prefix + n.right.String(depth+1)
+	}
+	return s
+}
+
 const NumTrees = 100
 const SampleSize = 256
 
 func BuildForest(dataSet *DataSet) *IsolationForest {
 	forest := IsolationForest{
-		trees:           []*IsolationTree{},
-		trainingSize:    dataSet.Size,
-		features:        make(map[string]Feature),
-		expectedAverage: 0,
+		Trees:           []*IsolationTree{},
+		attributes:      make(map[string]Attribute),
+		expectedAverage: avgPathLen(SampleSize),
 	}
 
 	maxDepth := uint(math.Ceil(math.Log2(float64(SampleSize))))
 
 	for i := 0; i < NumTrees; i++ {
-		forest.trees = append(forest.trees,
-			&IsolationTree{Root: buildTree(dataSet.sample(SampleSize), 0, maxDepth)})
+		forest.Trees = append(forest.Trees,
+			&IsolationTree{Root: buildTree(dataSet.Sample(SampleSize), 0, maxDepth, make(map[Attribute]bool))})
 	}
 
-	for _, feature := range dataSet.Features {
-		forest.features[feature.Name] = feature
+	for _, feature := range dataSet.Attributes {
+		forest.attributes[feature.Name] = feature
 	}
-
-	forest.expectedAverage = avgPathLen(SampleSize)
-
-	fmt.Printf("For dataset of size %d, expected average path length is %f (max depth:%d)\n",
-		SampleSize, forest.expectedAverage, maxDepth)
 
 	return &forest
 }
 
-func buildTree(dataSet *DataSet, depth uint, maxDepth uint) *IsolationTreeNode {
+func buildTree(dataSet *DataSet, depth uint, maxDepth uint, exclude map[Attribute]bool) *IsolationTreeNode {
 	node := &IsolationTreeNode{}
+	node.remainingSize = dataSet.Size
 	if dataSet.Size <= 1 || depth >= maxDepth {
-		fmt.Printf("Leaf node at depth %d with remaining size %d\n", depth, dataSet.Size)
 		node.isLeaf = true
-		node.remainingSize = dataSet.Size
 	} else {
-		split, left, right := dataSet.Split()
-
-		var zero *DataSet
-		if left.Size == 0 {
-			zero = left
-		} else if right.Size == 0 {
-			zero = right
+		split, left, right, err := dataSet.Split(exclude)
+		if errors.Is(err, ErrNotSplittable) {
+			node.isLeaf = true
+		} else {
+			node.split = split
+			// If a split has resulted in a dataset with no elements on one side,
+			// don't use that split again in this tree. This can happens when all
+			// elements have the same value for an attribute.
+			if left.Size == 0 || right.Size == 0 {
+				exclude = addExclusion(exclude, split.attribute)
+			}
+			node.left = buildTree(left, depth+1, maxDepth, exclude)
+			node.right = buildTree(right, depth+1, maxDepth, exclude)
 		}
-
-		if zero != nil {
-			fmt.Printf("Zero split on feature %s with func %v\n", split.feature.Name, split.check)
-		}
-
-		if right.Size == 0 && left.Size == 0 {
-			panic(fmt.Sprintf("Split failed: left size %d, right size %d, zero size %d",
-				left.Size, right.Size, zero.Size))
-		}
-
-		node.isLeaf = true
-		node.remainingSize = dataSet.Size
-
-		node.split = split
-		node.left = buildTree(left, depth+1, maxDepth)
-		node.right = buildTree(right, depth+1, maxDepth)
 	}
 
 	return node
 }
 
+func addExclusion(exclude map[Attribute]bool, attr Attribute) map[Attribute]bool {
+	newMap := make(map[Attribute]bool)
+	for k, v := range exclude {
+		newMap[k] = v
+	}
+	newMap[attr] = true
+	return newMap
+}
+
 func harmonicNumber(n int) float64 {
-	return math.Log(float64(n)) + 0.5772156649 // Euler-Mascheroni constant
+	return math.Log(float64(n)) + 0.5772156649
 }
 
 func avgPathLen(size int) float64 {
